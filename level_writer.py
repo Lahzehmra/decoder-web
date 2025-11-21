@@ -1,0 +1,105 @@
+#!/usr/bin/env python3
+import os, json, time, math, shutil, subprocess, array, signal
+
+BASE = os.path.dirname(os.path.abspath(__file__))
+CONF = os.path.join(BASE, 'config.json')
+OUT  = os.path.join(BASE, 'levels.json')
+FFMPEG = shutil.which('ffmpeg') or '/usr/bin/ffmpeg'
+
+SAMPLE_RATE = 16000      # Hz (low CPU)
+CHUNK_MS    = 50         # update ~20 Hz
+CHUNK_FR    = SAMPLE_RATE * CHUNK_MS // 1000  # frames per update
+ALPHA       = 0.6        # smoothing factor (higher = snappier)
+
+rms_l = 1e-6
+rms_r = 1e-6
+
+
+def load_url() -> str:
+    try:
+        with open(CONF, 'r', encoding='utf-8') as f:
+            j = json.load(f)
+        u = j.get('stream_url', '')
+        return u if isinstance(u, str) else ''
+    except Exception:
+        return ''
+
+
+def write_levels(db_l: float, db_r: float, pk_l: float, pk_r: float) -> None:
+    try:
+        tmp = OUT + '.tmp'
+        with open(tmp, 'w', encoding='utf-8') as f:
+            json.dump({'t': time.time(), 'L_db': db_l, 'R_db': db_r, 'L_peak_db': pk_l, 'R_peak_db': pk_r}, f)
+        os.replace(tmp, OUT)
+    except Exception:
+        pass
+
+
+def run():
+    global rms_l, rms_r
+    while True:
+        url = load_url()
+        if not url:
+            time.sleep(0.2)
+            continue
+        try:
+            proc = subprocess.Popen([
+                FFMPEG,
+                '-hide_banner','-loglevel','error',
+                '-reconnect','1','-reconnect_streamed','1','-reconnect_delay_max','10',
+                '-i', url,
+                '-f','s16le','-ac','2','-ar',str(SAMPLE_RATE), '-'
+            ], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        except Exception:
+            time.sleep(0.5)
+            continue
+
+        bytes_per_chunk = CHUNK_FR * 2  * 2 
+        try:
+            while True:
+                data = proc.stdout.read(bytes_per_chunk) if proc.stdout else b''
+                if not data:
+                    break
+                samples = array.array('h'); samples.frombytes(data)
+                if len(samples) < 4:
+                    continue
+                # Interleaved L,R
+                sum_l = 0.0
+                sum_r = 0.0
+                peak_l = 0
+                peak_r = 0
+                n = len(samples)//2
+                for i in range(0, n*2, 2):
+                    a = samples[i]
+                    b = samples[i+1]
+                    aa = a*a
+                    bb = b*b
+                    sum_l += aa
+                    sum_r += bb
+                    aa = abs(a)
+                    bb = abs(b)
+                    if aa > peak_l: peak_l = aa
+                    if bb > peak_r: peak_r = bb
+                if n == 0:
+                    continue
+                inst_l = max(1e-6, math.sqrt(sum_l/n)/32767.0)
+                inst_r = max(1e-6, math.sqrt(sum_r/n)/32767.0)
+                rms_l = (1-ALPHA)*rms_l + ALPHA*inst_l
+                rms_r = (1-ALPHA)*rms_r + ALPHA*inst_r
+                db_l  = 20*math.log10(rms_l)
+                db_r  = 20*math.log10(rms_r)
+                pk_db_l = 20*math.log10(max(1e-6, peak_l/32767.0))
+                pk_db_r = 20*math.log10(max(1e-6, peak_r/32767.0))
+                write_levels(round(db_l,1), round(db_r,1), round(pk_db_l,1), round(pk_db_r,1))
+        except Exception:
+            pass
+        finally:
+            try:
+                proc.terminate()
+            except Exception:
+                pass
+            # quick backoff
+            time.sleep(0.1)
+
+if __name__ == '__main__':
+    run()
