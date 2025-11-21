@@ -11,8 +11,6 @@
   <title>PCM5102A Stream Player</title>
 
   <style>
-.led { display:inline-block; width:10px; height:10px; border-radius:50%; background:#666; margin-left:6px; vertical-align:middle; }
-    button.micro { padding:2px 6px; font-size:12px; margin-left:6px; }
 
     :root { --bg:#0b0f14; --card:#121822; --acc:#2eaadc; --text:#e9f1f5; --muted:#9ab3c0; --success:#28a745; }
 
@@ -97,20 +95,21 @@
 
     <div class="section">
       <h2>Audio Player</h2>
-      <label>Link 1 <span id="led1" class="led"></span> <button class="micro" title="Start" onclick="startBg(1)">▶</button> <button class="micro" title="Stop" onclick="stopBg(1)">■</button></label>
+      <label>Link 1</label>
       <input id="url1" placeholder="example.com:8000/;stream"  value="{{ config.get('stream_url1','') }}" />
-      <label>Link 2 (fallback) <span id="led2" class="led"></span> <button class="micro" title="Start" onclick="startBg(2)">▶</button> <button class="micro" title="Stop" onclick="stopBg(2)">■</button></label>
+      <label>Link 2 (fallback)</label>
       <input id="url2" placeholder="backup:8000/;stream"  value="{{ config.get('stream_url2','') }}" />
       <label>Buffer (seconds)</label>
       <input id="buffer" type="number" min="1" max="60" value="12" />
       <div class="controls">
-        <button id="playBtn" class="play-btn" onclick="startDual()">▶ Play All</button>
-        <button class="secondary" onclick="toggleLinks()">⇄ Toggle Links</button>
-        <button id="stopBtn" class="secondary" onclick="stopPlay()">⏹ Stop All</button>
+        <button id="playBtn" class="play-btn" onclick="startPlay()">▶ Play</button>
+        <button class="secondary" onclick="switchToLink2()">⇄ Switch to Link 2</button>
+        <button id="stopBtn" class="secondary" onclick="stopPlay()">⏹ Stop</button>
       </div>
       <div class="status" id="playerStatus">Ready to play</div>
     </div>
 
+      <div class="status" id="playerStatus">Ready to play</div>
 
     </div>
 
@@ -204,19 +203,6 @@
     setTimeout(pollMeters, 300);
   }
   window.addEventListener('load', pollMeters);
-</script>
-<script>
-async function startDual(){ const s=document.getElementById("playerStatus"); try{const r=await fetch("/api/start_dual",{method:'POST'}); const j=await r.json(); if(s){ s.textContent = j.success? "Playing L1 (dual started)" : ("Failed: "+(j.message||"start_dual")); }}catch(e){ if(s){ s.textContent="Error starting"; } } }
-</script>
-<script>
-async function pollHealth(){try{const r=await fetch("/api/link_health"); const j=await r.json(); const l1=document.getElementById("led1"); const l2=document.getElementById("led2"); if(l1){l1.style.background = j.l1?"#28a745":"#dc3545";} if(l2){l2.style.background = j.l2?"#28a745":"#dc3545";} }catch(e){} setTimeout(pollHealth, 3000);} window.addEventListener("load", pollHealth);
-async function startBg(i){ await fetch("/api/link/"+i+"/start_bg",{method:"POST"}); }
-async function stopBg(i){ await fetch("/api/link/"+i+"/stop_bg",{method:"POST"}); }
-</script>
-  window.addEventListener('load', pollMeters);
-</script>
-<script>
-async function toggleLinks(){try{const r=await fetch("/api/toggle",{method:'POST'});const j=await r.json();const s=document.getElementById("playerStatus");if(j.success){if(s){s.textContent="Switched to "+(j.active_idx===1?"Link 1":"Link 2");}}else{if(s){s.textContent="Failed: "+(j.message||"toggle");}}}catch(e){const s=document.getElementById("playerStatus"); if(s){s.textContent="Error toggling";}}}
 </script>
 <script>
 function postJSON(u,b){return fetch(u,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});}

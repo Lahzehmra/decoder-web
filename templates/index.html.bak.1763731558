@@ -104,13 +104,14 @@
       <label>Buffer (seconds)</label>
       <input id="buffer" type="number" min="1" max="60" value="12" />
       <div class="controls">
-        <button id="playBtn" class="play-btn" onclick="startDual()">▶ Play All</button>
+        <button id="playBtn" class="play-btn" onclick="startPlay()">▶ Play</button>
         <button class="secondary" onclick="toggleLinks()">⇄ Toggle Links</button>
-        <button id="stopBtn" class="secondary" onclick="stopPlay()">⏹ Stop All</button>
+        <button id="stopBtn" class="secondary" onclick="stopPlay()">⏹ Stop</button>
       </div>
       <div class="status" id="playerStatus">Ready to play</div>
     </div>
 
+      <div class="status" id="playerStatus">Ready to play</div>
 
     </div>
 
@@ -203,11 +204,6 @@
     }catch(e){ /* ignore */ }
     setTimeout(pollMeters, 300);
   }
-  window.addEventListener('load', pollMeters);
-</script>
-<script>
-async function startDual(){ const s=document.getElementById("playerStatus"); try{const r=await fetch("/api/start_dual",{method:'POST'}); const j=await r.json(); if(s){ s.textContent = j.success? "Playing L1 (dual started)" : ("Failed: "+(j.message||"start_dual")); }}catch(e){ if(s){ s.textContent="Error starting"; } } }
-</script>
 <script>
 async function pollHealth(){try{const r=await fetch("/api/link_health"); const j=await r.json(); const l1=document.getElementById("led1"); const l2=document.getElementById("led2"); if(l1){l1.style.background = j.l1?"#28a745":"#dc3545";} if(l2){l2.style.background = j.l2?"#28a745":"#dc3545";} }catch(e){} setTimeout(pollHealth, 3000);} window.addEventListener("load", pollHealth);
 async function startBg(i){ await fetch("/api/link/"+i+"/start_bg",{method:"POST"}); }

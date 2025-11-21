@@ -27,8 +27,6 @@ PLAYER_PROC = None
 TEST_PROC = None
 CURRENT_VOLUME = 100
 
-PLAYBACK_ENABLED = True
-
 BG_PROCS = {1: None, 2: None}
 
 DEFAULT_CONFIG = {
@@ -40,8 +38,7 @@ DEFAULT_CONFIG = {
     'volume': 100,
     'test_frequency': 440,
     'test_duration': 5,
-    'test_device': 'hw:0,0',
-    'is_playing': False
+    'test_device': 'hw:0,0'
 }
 
 CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'config.json')
@@ -128,18 +125,13 @@ def stop_player():
                 PLAYER_PROC.wait(timeout=1)
             except Exception:
                 pass
-        # Do not kill background decoders; only stop active output
-        pass
+        subprocess.run(['pkill','-x','cvlc'], check=False)
+        subprocess.run(['pkill','-x','ffmpeg'], check=False)
+        subprocess.run(['pkill','-x','aplay'], check=False)
+        subprocess.run(['pkill','-x','mpg123'], check=False)
     except Exception:
         pass
     PLAYER_PROC = None
-    try:
-        # Kill any lingering output processes to DAC (keep background decoders)
-        subprocess.run(['pkill','-f','cvlc.*--alsa-audio-device=hw:0,0'], check=False)
-        subprocess.run(['pkill','-f','vlc.*--alsa-audio-device=hw:0,0'], check=False)
-        subprocess.run(['pkill','-f','aplay.*-D\s*hw:0,0'], check=False)
-    except Exception:
-        pass
 
 def stop_test():
     global TEST_PROC
@@ -325,9 +317,6 @@ def index():
 @app.route('/api/start', methods=['POST'])
 @login_required
 def api_start():
-    global PLAYBACK_ENABLED
-    PLAYBACK_ENABLED = True
-    update_config(is_playing=True)
     try:
         data = parse_request_payload()
         if not data:
@@ -347,37 +336,10 @@ def api_start():
     except Exception as e:
         return jsonify(success=False, message=str(e)), 500
 
-
-
-def stop_all():
-    global PLAYBACK_ENABLED
-    PLAYBACK_ENABLED = False
-    update_config(is_playing=False)
-    # stop output player
-    stop_player()
-    # stop background decoders
-    try:
-        for i, proc in list(BG_PROCS.items()):
-            try:
-                if proc and proc.poll() is None:
-                    proc.terminate()
-            except Exception:
-                pass
-            BG_PROCS[i] = None
-    except Exception:
-        pass
-    # ensure any lingering bg processes are gone
-    try:
-        subprocess.run(['pkill','-f','cvlc.*--aout\s*dummy'], check=False)
-        subprocess.run(['pkill','-f','ffmpeg .* -f null -'], check=False)
-        subprocess.run(['pkill','-f','curl -L --fail --silent --show-error'], check=False)
-    except Exception:
-        pass
-
 @app.route('/api/stop', methods=['POST'])
 @login_required
 def api_stop():
-    stop_all()
+    stop_player()
     return jsonify(success=True)
 
 @app.route('/api/test/start', methods=['POST'])
@@ -556,9 +518,6 @@ def get_active_url() -> str:
 @app.route('/api/toggle', methods=['POST'])
 @login_required
 def api_toggle():
-    global PLAYBACK_ENABLED
-    PLAYBACK_ENABLED = True
-    update_config(is_playing=True)
     try:
         cur = int(CONFIG.get('current_stream_idx', 1) or 1)
         new_idx = 2 if cur == 1 else 1
@@ -590,21 +549,7 @@ def _health_of(url: str, timeout: float = 2.0) -> bool:
     except Exception:
         return False
 
-
-def _bg_running_for_url(url: str) -> bool:
-    if not url:
-        return False
-    try:
-        out = _sp.check_output(['pgrep','-af','ffmpeg'], text=True)
-        for line in out.splitlines():
-            if url in line and ' -f null -' in line:
-                return True
-    except Exception:
-        pass
-    return False
-
 @app.route('/api/link_health', methods=['GET'])
-
 @login_required
 def api_link_health():
     u1 = CONFIG.get('stream_url1','')
@@ -612,35 +557,19 @@ def api_link_health():
     return jsonify(success=True, l1=_health_of(normalize_url(u1) if u1 else ''), l2=_health_of(normalize_url(u2) if u2 else ''))
 
 
-
 def _start_bg_for(idx: int) -> bool:
     url = CONFIG.get('stream_url1','') if idx == 1 else CONFIG.get('stream_url2','')
     url = normalize_url(url)
     if not url:
         return False
-    import shutil, subprocess, os
-    # Try cvlc with dummy output (no DAC usage)
-    cvlc = shutil.which('cvlc') or '/usr/bin/cvlc'
-    if os.path.exists(cvlc):
-        try:
-            proc = subprocess.Popen([cvlc,'--intf','dummy','--no-video','--quiet','--aout','dummy',url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            BG_PROCS[idx] = proc
-            import time as _t
-            _t.sleep(0.2)
-            if proc.poll() is None:
-                return True
-        except Exception:
-            pass
-    # Fallback to ffmpeg to null
+    # Prefer ffmpeg piping to null
+    import shutil, subprocess
     ff = shutil.which('ffmpeg') or '/usr/bin/ffmpeg'
     if os.path.exists(ff):
         try:
             proc = subprocess.Popen([ff,'-hide_banner','-loglevel','error','-reconnect','1','-reconnect_streamed','1','-reconnect_delay_max','10','-i',url,'-f','null','-'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             BG_PROCS[idx] = proc
-            import time as _t
-            _t.sleep(0.2)
-            if proc.poll() is None:
-                return True
+            return True
         except Exception:
             pass
     # Fallback: curl
@@ -678,87 +607,6 @@ def api_link_stop_bg(idx: int):
     idx = 1 if idx != 2 else 2
     ok = _stop_bg_for(idx)
     return jsonify(success=ok)
-
-
-FAILOVER_INTERVAL_S = 3
-FAILOVER_FAILCOUNT = 3
-
-_last_ok = 0
-_fail_count = 0
-
-def _active_url_and_other():
-    idx = int(CONFIG.get('current_stream_idx', 1) or 1)
-    a = normalize_url(CONFIG.get('stream_url1','')) if idx == 1 else normalize_url(CONFIG.get('stream_url2',''))
-    b = normalize_url(CONFIG.get('stream_url2','')) if idx == 1 else normalize_url(CONFIG.get('stream_url1',''))
-    return idx, a, b
-
-
-def monitor_active_loop():
-    global _last_ok, _fail_count
-    import time
-    while True:
-        try:
-            if not PLAYBACK_ENABLED:
-                stop_player()
-                time.sleep(FAILOVER_INTERVAL_S)
-                continue
-            idx, active, other = _active_url_and_other()
-            ok = _health_of(active) if active else False
-            if ok:
-                _fail_count = 0
-            else:
-                _fail_count += 1
-                # If active failed repeatedly, try other if healthy
-                if _fail_count >= FAILOVER_FAILCOUNT:
-                    if other and _health_of(other):
-                        # Flip active
-                        new_idx = 2 if idx == 1 else 1
-                        update_config(current_stream_idx=new_idx)
-                        stop_player()
-                        if start_player(other, CONFIG.get('device','hw:0,0'), int(CONFIG.get('volume',100))):
-                            update_config(stream_url=other)
-                            _fail_count = 0
-            time.sleep(FAILOVER_INTERVAL_S)
-        except Exception:
-            time.sleep(FAILOVER_INTERVAL_S)
-
-# Start monitor thread once at import
-def _start_monitor_once():
-    try:
-        t = threading.Thread(target=monitor_active_loop, daemon=True)
-        t.start()
-    except Exception:
-        pass
-
-_start_monitor_once()
-
-
-@app.route('/api/start_dual', methods=['POST'])
-@login_required
-def api_start_dual():
-    global PLAYBACK_ENABLED
-    PLAYBACK_ENABLED = True
-    update_config(is_playing=True)
-    try:
-        # Start background decoders for both links if configured
-        _start_bg_for(1)
-        _start_bg_for(2)
-        # Route Link 1 to output by default
-        update_config(current_stream_idx=1)
-        url = normalize_url(CONFIG.get('stream_url1',''))
-        if not url:
-            # if link1 missing, try link2
-            update_config(current_stream_idx=2)
-            url = normalize_url(CONFIG.get('stream_url2',''))
-        if not url:
-            return jsonify(success=False, message='No links configured'), 400
-        stop_player()
-        ok = start_player(url, CONFIG.get('device','hw:0,0'), int(CONFIG.get('volume',100)))
-        if ok:
-            update_config(stream_url=url)
-        return jsonify(success=ok)
-    except Exception as e:
-        return jsonify(success=False, message=str(e)), 500
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=False)

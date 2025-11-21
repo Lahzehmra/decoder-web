@@ -15,37 +15,14 @@ rms_l = 1e-6
 rms_r = 1e-6
 
 
-
 def load_url() -> str:
-    """Return active URL from config (based on current_stream_idx)."""
     try:
         with open(CONF, 'r', encoding='utf-8') as f:
             j = json.load(f)
-        # Choose active URL by current_stream_idx if available
-        idx = int(j.get('current_stream_idx', 1) or 1)
-        u = ''
-        if idx == 1:
-            u = j.get('stream_url1') or ''
-        else:
-            u = j.get('stream_url2') or ''
-        if not isinstance(u, str) or not u:
-            u = j.get('stream_url', '') if isinstance(j.get('stream_url'), str) else ''
-        # Normalize: ensure scheme
-        if u and not re.match(r'^[a-zA-Z][a-zA-Z0-9+.-]*://', u):
-            u = 'http://' + u.strip()
-        return u.strip()
+        u = j.get('stream_url', '')
+        return u if isinstance(u, str) else ''
     except Exception:
         return ''
-
-
-def load_is_playing() -> bool:
-    try:
-        import json as _json
-        with open(CONF,'r',encoding='utf-8') as f:
-            j=_json.load(f)
-        return bool(j.get('is_playing', False))
-    except Exception:
-        return False
 
 
 def write_levels(db_l: float, db_r: float, pk_l: float, pk_r: float) -> None:
@@ -63,10 +40,6 @@ def run():
     global rms_l, rms_r
     while True:
         url = load_url()
-        if not load_is_playing():
-            write_levels(-60.0, -60.0, -60.0, -60.0)
-            time.sleep(0.2)
-            continue
         if current_url is None:
             current_url = url
         if not url:

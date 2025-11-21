@@ -111,6 +111,7 @@
       <div class="status" id="playerStatus">Ready to play</div>
     </div>
 
+      <div class="status" id="playerStatus">Ready to play</div>
 
     </div>
 
@@ -203,8 +204,6 @@
     }catch(e){ /* ignore */ }
     setTimeout(pollMeters, 300);
   }
-  window.addEventListener('load', pollMeters);
-</script>
 <script>
 async function startDual(){ const s=document.getElementById("playerStatus"); try{const r=await fetch("/api/start_dual",{method:'POST'}); const j=await r.json(); if(s){ s.textContent = j.success? "Playing L1 (dual started)" : ("Failed: "+(j.message||"start_dual")); }}catch(e){ if(s){ s.textContent="Error starting"; } } }
 </script>

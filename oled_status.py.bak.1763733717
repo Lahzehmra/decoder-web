@@ -16,15 +16,6 @@ BASE = os.path.dirname(os.path.abspath(__file__))
 LEVELS_PATH = os.path.join(BASE, 'levels.json')
 CONF_PATH = os.path.join(BASE, 'config.json')
 
-def load_playing() -> bool:
-    try:
-        with open(CONF_PATH,'r',encoding='utf-8') as f:
-            j=json.load(f)
-        return bool(j.get('is_playing', False))
-    except Exception:
-        return False
-
-
 
 def get_ip() -> str:
     try:
@@ -114,13 +105,12 @@ def main():
         ip = get_ip()
         status = get_status()
         j = read_levels() or {}
-        playing = load_playing()
-        L_db = j.get('L_db', -60.0) if playing else -60.0
-        R_db = j.get('R_db', -60.0) if playing else -60.0
-        Lp_db = j.get('L_peak_db', L_db) if playing else -60.0
-        Rp_db = j.get('R_peak_db', R_db) if playing else -60.0
-        L_n = norm_from_db(L_db) if playing else 0.0
-        R_n = norm_from_db(R_db) if playing else 0.0
+        L_db = j.get('L_db', -60.0)
+        R_db = j.get('R_db', -60.0)
+        Lp_db = j.get('L_peak_db', L_db)
+        Rp_db = j.get('R_peak_db', R_db)
+        L_n = norm_from_db(L_db)
+        R_n = norm_from_db(R_db)
         with canvas(device) as draw:
             # Header
             draw.text((0, 0), f"IP: {ip}", fill=255, font=font)

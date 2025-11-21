@@ -40,8 +40,7 @@ DEFAULT_CONFIG = {
     'volume': 100,
     'test_frequency': 440,
     'test_duration': 5,
-    'test_device': 'hw:0,0',
-    'is_playing': False
+    'test_device': 'hw:0,0'
 }
 
 CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'config.json')
@@ -327,7 +326,6 @@ def index():
 def api_start():
     global PLAYBACK_ENABLED
     PLAYBACK_ENABLED = True
-    update_config(is_playing=True)
     try:
         data = parse_request_payload()
         if not data:
@@ -352,7 +350,6 @@ def api_start():
 def stop_all():
     global PLAYBACK_ENABLED
     PLAYBACK_ENABLED = False
-    update_config(is_playing=False)
     # stop output player
     stop_player()
     # stop background decoders
@@ -558,7 +555,6 @@ def get_active_url() -> str:
 def api_toggle():
     global PLAYBACK_ENABLED
     PLAYBACK_ENABLED = True
-    update_config(is_playing=True)
     try:
         cur = int(CONFIG.get('current_stream_idx', 1) or 1)
         new_idx = 2 if cur == 1 else 1
@@ -738,7 +734,6 @@ _start_monitor_once()
 def api_start_dual():
     global PLAYBACK_ENABLED
     PLAYBACK_ENABLED = True
-    update_config(is_playing=True)
     try:
         # Start background decoders for both links if configured
         _start_bg_for(1)

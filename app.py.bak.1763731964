@@ -27,8 +27,6 @@ PLAYER_PROC = None
 TEST_PROC = None
 CURRENT_VOLUME = 100
 
-PLAYBACK_ENABLED = True
-
 BG_PROCS = {1: None, 2: None}
 
 DEFAULT_CONFIG = {
@@ -40,8 +38,7 @@ DEFAULT_CONFIG = {
     'volume': 100,
     'test_frequency': 440,
     'test_duration': 5,
-    'test_device': 'hw:0,0',
-    'is_playing': False
+    'test_device': 'hw:0,0'
 }
 
 CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'config.json')
@@ -128,18 +125,13 @@ def stop_player():
                 PLAYER_PROC.wait(timeout=1)
             except Exception:
                 pass
-        # Do not kill background decoders; only stop active output
-        pass
+        subprocess.run(['pkill','-x','cvlc'], check=False)
+        subprocess.run(['pkill','-x','ffmpeg'], check=False)
+        subprocess.run(['pkill','-x','aplay'], check=False)
+        subprocess.run(['pkill','-x','mpg123'], check=False)
     except Exception:
         pass
     PLAYER_PROC = None
-    try:
-        # Kill any lingering output processes to DAC (keep background decoders)
-        subprocess.run(['pkill','-f','cvlc.*--alsa-audio-device=hw:0,0'], check=False)
-        subprocess.run(['pkill','-f','vlc.*--alsa-audio-device=hw:0,0'], check=False)
-        subprocess.run(['pkill','-f','aplay.*-D\s*hw:0,0'], check=False)
-    except Exception:
-        pass
 
 def stop_test():
     global TEST_PROC
@@ -325,9 +317,6 @@ def index():
 @app.route('/api/start', methods=['POST'])
 @login_required
 def api_start():
-    global PLAYBACK_ENABLED
-    PLAYBACK_ENABLED = True
-    update_config(is_playing=True)
     try:
         data = parse_request_payload()
         if not data:
@@ -347,37 +336,10 @@ def api_start():
     except Exception as e:
         return jsonify(success=False, message=str(e)), 500
 
-
-
-def stop_all():
-    global PLAYBACK_ENABLED
-    PLAYBACK_ENABLED = False
-    update_config(is_playing=False)
-    # stop output player
-    stop_player()
-    # stop background decoders
-    try:
-        for i, proc in list(BG_PROCS.items()):
-            try:
-                if proc and proc.poll() is None:
-                    proc.terminate()
-            except Exception:
-                pass
-            BG_PROCS[i] = None
-    except Exception:
-        pass
-    # ensure any lingering bg processes are gone
-    try:
-        subprocess.run(['pkill','-f','cvlc.*--aout\s*dummy'], check=False)
-        subprocess.run(['pkill','-f','ffmpeg .* -f null -'], check=False)
-        subprocess.run(['pkill','-f','curl -L --fail --silent --show-error'], check=False)
-    except Exception:
-        pass
-
 @app.route('/api/stop', methods=['POST'])
 @login_required
 def api_stop():
-    stop_all()
+    stop_player()
     return jsonify(success=True)
 
 @app.route('/api/test/start', methods=['POST'])
@@ -556,9 +518,6 @@ def get_active_url() -> str:
 @app.route('/api/toggle', methods=['POST'])
 @login_required
 def api_toggle():
-    global PLAYBACK_ENABLED
-    PLAYBACK_ENABLED = True
-    update_config(is_playing=True)
     try:
         cur = int(CONFIG.get('current_stream_idx', 1) or 1)
         new_idx = 2 if cur == 1 else 1
@@ -698,10 +657,6 @@ def monitor_active_loop():
     import time
     while True:
         try:
-            if not PLAYBACK_ENABLED:
-                stop_player()
-                time.sleep(FAILOVER_INTERVAL_S)
-                continue
             idx, active, other = _active_url_and_other()
             ok = _health_of(active) if active else False
             if ok:
@@ -736,9 +691,6 @@ _start_monitor_once()
 @app.route('/api/start_dual', methods=['POST'])
 @login_required
 def api_start_dual():
-    global PLAYBACK_ENABLED
-    PLAYBACK_ENABLED = True
-    update_config(is_playing=True)
     try:
         # Start background decoders for both links if configured
         _start_bg_for(1)
