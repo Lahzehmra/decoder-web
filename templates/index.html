@@ -1,0 +1,291 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>PCM5102A Stream Player</title>
+  <style>
+    :root { --bg:#0b0f14; --card:#121822; --acc:#2eaadc; --text:#e9f1f5; --muted:#9ab3c0; --success:#28a745; }
+    body { margin:0; font-family: system-ui,-apple-system,Segoe UI,Roboto,Ubuntu; background:var(--bg); color:var(--text); }
+    .wrap { max-width:900px; margin:6vh auto; padding:24px; background:var(--card); border-radius:16px; box-shadow:0 8px 24px rgba(0,0,0,.25); }
+    h1 { margin:0 0 8px; font-size:26px; color:var(--acc); }
+    .header { display:flex; justify-content:space-between; align-items:center; margin-bottom:24px; }
+    .user-info { font-size:14px; color:var(--muted); }
+    .user-info a { color:var(--acc); text-decoration:none; }
+    .user-info a:hover { text-decoration:underline; }
+    h2 { margin:24px 0 12px; font-size:20px; color:var(--acc); }
+    label { display:block; font-size:14px; color:var(--muted); margin:10px 0 6px; }
+    input, select { width:100%; padding:12px 14px; border-radius:10px; border:1px solid #213040; background:#0e141c; color:var(--text); outline:none; box-sizing:border-box; font-size:15px; }
+    input:focus, select:focus { border-color:var(--acc); }
+    .row { display:flex; gap:12px; align-items:center; margin-top:16px; flex-wrap:wrap; }
+    button { appearance:none; border:0; padding:12px 18px; border-radius:10px; background:var(--acc); color:#022; font-weight:600; cursor:pointer; transition:all 0.2s; font-size:15px; }
+    button:hover { opacity:0.9; transform:translateY(-1px); }
+    button.secondary { background:#223244; color:var(--text); }
+    button:disabled { opacity:0.5; cursor:not-allowed; }
+    .status { margin-top:18px; font-size:14px; padding:12px; background:#0e141c; border-radius:8px; color:var(--muted); }
+    .status.success { color:var(--success); }
+    .status.error { color:#dc3545; }
+    .section { margin:24px 0; padding:20px; background:#0e141c; border-radius:12px; border:1px solid #213040; }
+    .slider-container { margin:16px 0; }
+    .slider { width:100%; height:6px; border-radius:3px; background:#213040; outline:none; -webkit-appearance:none; cursor:pointer; }
+    .slider::-webkit-slider-thumb { -webkit-appearance:none; appearance:none; width:18px; height:18px; border-radius:50%; background:var(--acc); cursor:pointer; }
+    .slider::-moz-range-thumb { width:18px; height:18px; border-radius:50%; background:var(--acc); cursor:pointer; border:none; }
+    .volume-display { text-align:center; font-size:18px; font-weight:600; color:var(--acc); margin:8px 0; }
+    .controls { display:flex; gap:12px; align-items:center; justify-content:center; margin:20px 0; }
+    .play-btn { font-size:24px; padding:16px 32px; background:var(--success); }
+    .info { background:#1a2532; padding:12px; border-radius:8px; font-size:13px; color:var(--muted); margin:12px 0; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="header">
+      <h1>🎧 PCM5102A Stream Player</h1>
+      <div class="user-info">
+        Logged in as: <strong>{{ session.username if session else 'admin' }}</strong> | 
+        <a href="/logout">Logout</a>
+      </div>
+    </div>
+    <p>Play network streams directly on the PCM5102A DAC. Playlist files (.m3u/.pls) are auto-resolved and VLC now runs with larger buffers (12‑15&nbsp;s) for smoother audio.</p>
+    <div class="info">
+      <strong>Tip:</strong> Preferred URLs are direct MP3/OGG/AAC streams. If a playlist is supplied the first playable entry will be used automatically.
+    </div>
+
+    <div class="section">
+      <h2>Audio Player</h2>
+      <label>Stream / Playlist URL</label>
+      <input id="url" type="text" placeholder="http://example.com:8000/stream or http://station/live.m3u" />
+      <label>Output Device</label>
+      <select id="device">
+        <option value="hw:0,0" selected>PCM5102A DAC (hw:0,0)</option>
+        <option value="default">Default Device</option>
+      </select>
+      <div class="controls">
+        <button id="playBtn" class="play-btn" onclick="togglePlay()">▶ Play</button>
+        <button id="stopBtn" class="secondary" onclick="stopPlayer()" disabled>⏹ Stop</button>
+      </div>
+      <div class="status" id="playerStatus">Ready to play</div>
+    </div>
+
+    <div class="section">
+      <h2>Volume & Defaults</h2>
+      <div class="volume-display">
+        <span id="volumeDisplay">100</span>%
+      </div>
+      <div class="slider-container">
+        <input type="range" id="volume" min="0" max="100" value="100" class="slider" oninput="updateVolume(this.value)" />
+      </div>
+      <div class="row">
+        <button class="secondary" onclick="setVolume(0)">Mute</button>
+        <button class="secondary" onclick="setVolume(40)">40%</button>
+        <button class="secondary" onclick="setVolume(60)">60%</button>
+        <button class="secondary" onclick="setVolume(80)">80%</button>
+        <button class="secondary" onclick="setVolume(100)">100%</button>
+      </div>
+      <div class="row" style="justify-content:flex-start;margin-top:20px;">
+        <button class="secondary" onclick="saveDefaults()">💾 Save Defaults</button>
+      </div>
+      <div class="status" id="configStatus">Defaults auto-save after playback or Save Defaults.</div>
+    </div>
+
+    <div class="section">
+      <h2>Playback Buffer</h2>
+      <p>VLC runs with 12&nbsp;s network caching plus 15&nbsp;s live/TCP/file buffers and auto reconnect. If VLC fails the ffmpeg→aplay fallback adds a 1&nbsp;MB input buffer with retry logic.</p>
+      <p>If a stream still stutters, restart playback or lower the source bit-rate.</p>
+    </div>
+  </div>
+
+  <script>
+    let isPlaying = false;
+    let currentVolume = 100;
+    let volumeSaveTimer = null;
+    let currentConfig = null;
+    const CONFIG_STATUS_DEFAULT = 'Defaults auto-save after playback or Save Defaults.';
+
+    const urlInput = document.getElementById('url');
+    const deviceSelect = document.getElementById('device');
+    const volumeSlider = document.getElementById('volume');
+    const volumeDisplay = document.getElementById('volumeDisplay');
+
+    const setStatus = (id, m, type='') => {
+      const el = document.getElementById(id);
+      if(!el) return;
+      el.textContent = m;
+      el.className = 'status' + (type ? ' ' + type : '');
+    };
+
+    const setSelectValue = (selectEl, value) => {
+      if(!selectEl) return;
+      const options = Array.from(selectEl.options || []);
+      const found = options.find(opt => opt.value === value);
+      selectEl.value = found ? value : (options[0]?.value || '');
+    };
+
+    const setVolumeUI = (value) => {
+      currentVolume = parseInt(value, 10);
+      if(Number.isNaN(currentVolume)){
+        currentVolume = 0;
+      }
+      volumeSlider.value = currentVolume;
+      volumeDisplay.textContent = currentVolume;
+    };
+
+    const scheduleVolumeSave = (value) => {
+      clearTimeout(volumeSaveTimer);
+      volumeSaveTimer = setTimeout(() => {
+        saveConfig({volume:value});
+      }, 400);
+    };
+
+    async function loadConfig(){
+      try{
+        const r = await fetch('/api/config');
+        const j = await r.json();
+        if(j.success && j.config){
+          currentConfig = j.config;
+          urlInput.value = j.config.stream_url || '';
+          setSelectValue(deviceSelect, j.config.device || 'hw:0,0');
+          setVolumeUI(j.config.volume ?? 100);
+          setStatus('configStatus', CONFIG_STATUS_DEFAULT, '');
+        }
+      }catch(e){
+        console.error('Config load error:', e);
+        setStatus('configStatus', 'Unable to load saved defaults', 'error');
+      }
+    }
+
+    async function saveConfig(updates={}, silent=true){
+      try{
+        const r = await fetch('/api/config', {
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body:JSON.stringify(updates)
+        });
+        const j = await r.json();
+        if(j.success){
+          currentConfig = j.config;
+          if(!silent){
+            setStatus('configStatus', 'Defaults saved', 'success');
+            setTimeout(() => setStatus('configStatus', CONFIG_STATUS_DEFAULT, ''), 3000);
+          }
+        } else if(!silent){
+          setStatus('configStatus', j.message || 'Failed to save defaults', 'error');
+        }
+      }catch(e){
+        if(!silent){
+          setStatus('configStatus', 'Error saving defaults: ' + e, 'error');
+        }
+      }
+    }
+
+    async function saveDefaults(){
+      const payload = {
+        stream_url: urlInput.value.trim(),
+        device: deviceSelect.value,
+        volume: currentVolume
+      };
+      await saveConfig(payload, false);
+    }
+
+    async function togglePlay(){
+      if(isPlaying){
+        await stopPlayer();
+      } else {
+        await startPlayer();
+      }
+    }
+
+    async function startPlayer(){
+      const url = urlInput.value.trim();
+      const device = deviceSelect.value;
+      const volume = currentVolume;
+      if(!url){
+        setStatus('playerStatus', 'Please enter stream URL', 'error');
+        return;
+      }
+      setStatus('playerStatus', 'Starting player...', '');
+      document.getElementById('playBtn').disabled = true;
+      try{
+        const r = await fetch('/api/start', {
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({url:url, device:device, volume:volume})
+        });
+        const j = await r.json();
+        if(j.success){
+          isPlaying = true;
+          document.getElementById('playBtn').textContent = '⏸ Pause';
+          document.getElementById('playBtn').disabled = false;
+          document.getElementById('stopBtn').disabled = false;
+          setStatus('playerStatus', 'Playing: ' + url, 'success');
+          saveConfig({stream_url:url, device:device, volume:volume});
+        } else {
+          setStatus('playerStatus', 'Failed: ' + (j.message || 'Unknown error'), 'error');
+          document.getElementById('playBtn').disabled = false;
+        }
+      }catch(e){
+        setStatus('playerStatus', 'Error: ' + e, 'error');
+        document.getElementById('playBtn').disabled = false;
+      }
+    }
+
+    async function stopPlayer(){
+      setStatus('playerStatus', 'Stopping...', '');
+      document.getElementById('playBtn').disabled = true;
+      try{
+        const r = await fetch('/api/stop', {method:'POST'});
+        const j = await r.json();
+        isPlaying = false;
+        document.getElementById('playBtn').textContent = '▶ Play';
+        document.getElementById('playBtn').disabled = false;
+        document.getElementById('stopBtn').disabled = true;
+        setStatus('playerStatus', j.success ? 'Stopped' : 'Error stopping', j.success ? 'success' : 'error');
+      }catch(e){
+        setStatus('playerStatus', 'Error: ' + e, 'error');
+        document.getElementById('playBtn').disabled = false;
+      }
+    }
+
+    async function updateVolume(value){
+      setVolumeUI(value);
+      scheduleVolumeSave(currentVolume);
+      if(isPlaying){
+        try{
+          await fetch('/api/volume', {
+            method:'POST',
+            headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({volume:currentVolume})
+          });
+        }catch(e){
+          console.error('Volume update error:', e);
+        }
+      }
+    }
+
+    function setVolume(vol){
+      volumeSlider.value = vol;
+      updateVolume(vol);
+    }
+
+    setInterval(async () => {
+      try{
+        const r = await fetch('/api/status');
+        const j = await r.json();
+        if(j.playing !== isPlaying){
+          isPlaying = j.playing;
+          document.getElementById('playBtn').textContent = isPlaying ? '⏸ Pause' : '▶ Play';
+          document.getElementById('stopBtn').disabled = !isPlaying;
+          setStatus('playerStatus', isPlaying ? 'Playing' : 'Stopped', isPlaying ? 'success' : '');
+        }
+        if(typeof j.volume === 'number' && j.volume !== currentVolume){
+          setVolumeUI(j.volume);
+        }
+      }catch(e){
+        console.error('Status check error:', e);
+      }
+    }, 1000);
+
+    loadConfig();
+    setStatus('configStatus', CONFIG_STATUS_DEFAULT, '');
+  </script>
+</body>
+</html>

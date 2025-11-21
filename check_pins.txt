@@ -1,0 +1,21 @@
+PCM5102A Pin Connections to Raspberry Pi:
+=========================================
+BCLK  -> GPIO 18 (Pin 12)
+LRCLK -> GPIO 19 (Pin 35)  
+DIN   -> GPIO 21 (Pin 40) [YOU CORRECTED THIS]
+MCLK  -> GPIO 20 (Pin 38) - if needed
+VCC   -> 3.3V (Pin 1)
+GND   -> Ground (Pin 6)
+
+PCM5102A Output:
+LRCK (Volume) -> Speaker/Headphone
+VOUTL+ -> Left channel output
+VOUTR+ -> Right channel output
+VOUTL- -> Ground
+VOUTR- -> Ground
+
+Check:
+1. Are BCLK, LRCLK, DIN connected correctly?
+2. Is PCM5102A power LED on?
+3. Are speakers/headphones connected to VOUTL+ and VOUTR+?
+4. Is MCLK connected? (PCM5102A needs MCLK = 256 * sample rate)

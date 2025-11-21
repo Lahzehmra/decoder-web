@@ -1,0 +1,16 @@
+PCM5102A BCLK Issue:
+====================
+
+Current Situation:
+- BCLK (SCK) is NOT connected
+- Bypass jumper is OPEN (not closed)
+- PCM5102A needs BCLK OR bypass jumper closed
+
+Solution Options:
+1. Connect BCLK: GPIO 18 (Pin 12) -> BCLK on PCM5102A
+2. OR close the bypass jumper on the board
+
+The bypass jumper allows PCM5102A to use internal clock
+generation instead of external BCLK.
+
+If jumper is open, BCLK MUST be connected.

@@ -1,0 +1,422 @@
+#!/usr/bin/env python3
+from flask import Flask, jsonify, request, render_template, session, redirect, url_for
+from functools import wraps
+import json
+import subprocess
+import shutil
+import os
+import time
+import hashlib
+import struct
+import sys
+from threading import Lock
+
+# Add current directory to path to import drivers
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+app = Flask(__name__)
+app.config['SECRET_KEY'] = 'decoder-web-secret-key-change-in-production'
+app.config['SESSION_COOKIE_HTTPONLY'] = True
+app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+
+# Default credentials
+ADMIN_USERNAME = 'admin'
+ADMIN_PASSWORD_HASH = hashlib.sha256('admin123'.encode()).hexdigest()
+
+PLAYER_PROC = None
+TEST_PROC = None
+CURRENT_VOLUME = 100
+
+DEFAULT_CONFIG = {
+    'stream_url': '',
+    'device': 'hw:0,0',
+    'volume': 100,
+    'test_frequency': 440,
+    'test_duration': 5,
+    'test_device': 'hw:0,0'
+}
+CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'config.json')
+CONFIG_LOCK = Lock()
+
+
+def load_config():
+    config = DEFAULT_CONFIG.copy()
+    try:
+        with open(CONFIG_PATH, 'r', encoding='utf-8') as handle:
+            data = json.load(handle)
+        if isinstance(data, dict):
+            for key in config:
+                if key in data:
+                    config[key] = data[key]
+    except Exception:
+        pass
+    return config
+
+
+CONFIG = load_config()
+
+
+def persist_config():
+    try:
+        with open(CONFIG_PATH, 'w', encoding='utf-8') as handle:
+            json.dump(CONFIG, handle, indent=2)
+    except Exception as err:
+        app.logger.warning('Failed to write config: %s', err)
+
+
+def update_config(**updates):
+    changed = False
+    with CONFIG_LOCK:
+        for key, value in updates.items():
+            if key not in CONFIG or value is None:
+                continue
+            if CONFIG.get(key) != value:
+                CONFIG[key] = value
+                changed = True
+        if changed:
+            persist_config()
+    return CONFIG
+
+
+def parse_request_payload():
+    data = request.get_json(silent=True)
+    if isinstance(data, dict):
+        return data
+    if request.form:
+        return request.form.to_dict()
+    raw = request.get_data(as_text=True).strip()
+    if raw:
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError:
+            app.logger.warning('Invalid JSON payload: %s', raw[:200])
+    return {}
+
+def login_required(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if 'logged_in' not in session:
+            return redirect(url_for('login'))
+        return f(*args, **kwargs)
+    return decorated_function
+
+def stop_player():
+    global PLAYER_PROC
+    try:
+        if PLAYER_PROC and PLAYER_PROC.poll() is None:
+            PLAYER_PROC.terminate()
+            try:
+                PLAYER_PROC.wait(timeout=1)
+            except Exception:
+                pass
+        subprocess.run(['pkill','-x','cvlc'], check=False)
+        subprocess.run(['pkill','-x','ffmpeg'], check=False)
+        subprocess.run(['pkill','-x','aplay'], check=False)
+        subprocess.run(['pkill','-x','mpg123'], check=False)
+    except Exception:
+        pass
+    PLAYER_PROC = None
+
+def stop_test():
+    global TEST_PROC
+    try:
+        if TEST_PROC and TEST_PROC.poll() is None:
+            TEST_PROC.terminate()
+            try:
+                TEST_PROC.wait(timeout=1)
+            except Exception:
+                pass
+        subprocess.run(['pkill','-f','test_pcm5102a'], check=False)
+        subprocess.run(['pkill','-f','simple_test'], check=False)
+        subprocess.run(['pkill','-f','speaker-test'], check=False)
+    except Exception:
+        pass
+    TEST_PROC = None
+
+def start_player(url: str, out_dev: str = 'hw:0,0', volume: int = 100) -> bool:
+    global PLAYER_PROC, CURRENT_VOLUME
+    stop_player()
+    CURRENT_VOLUME = volume
+    
+    # Try VLC first (supports most codecs: MP3, OGG, WAV, AAC, FLAC, etc.)
+    cvlc = shutil.which('cvlc') or '/usr/bin/cvlc'
+    if os.path.exists(cvlc):
+        try:
+            vol_percent = int(volume * 256 / 100)  # VLC volume 0-256
+            vol_percent = max(0, min(256, vol_percent))
+            PLAYER_PROC = subprocess.Popen([
+                cvlc, '--intf','dummy','--no-video','--quiet',
+                '--aout','alsa', f'--alsa-audio-device={out_dev}',
+                '--network-caching','8000','--live-caching','12000',
+                '--volume', str(vol_percent),
+                url
+            ], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            time.sleep(1.5)
+            if PLAYER_PROC.poll() is None:
+                return True
+        except Exception:
+            pass
+    
+    # Fallback: ffmpeg -> aplay (supports many formats)
+    ffmpeg = shutil.which('ffmpeg') or '/usr/bin/ffmpeg'
+    aplay = shutil.which('aplay') or '/usr/bin/aplay'
+    if os.path.exists(ffmpeg) and os.path.exists(aplay):
+        try:
+            vol_gain = 20 * (volume / 100) - 20  # Volume in dB
+            PLAYER_PROC = subprocess.Popen([
+                ffmpeg,'-nostdin','-reconnect','1','-reconnect_streamed','1',
+                '-reconnect_delay_max','10', '-i', url,
+                '-f','s16le','-ac','2','-ar','44100',
+                '-af',f'volume={vol_gain}dB','-'
+            ], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            ap = subprocess.Popen([aplay,'-D',out_dev,'-f','cd','-c','2','-r','44100'], 
+                                stdin=PLAYER_PROC.stdout)
+            PLAYER_PROC.stdout.close()
+            time.sleep(1.5)
+            if PLAYER_PROC.poll() is None and ap.poll() is None:
+                return True
+        except Exception:
+            pass
+    
+    # Fallback: mpg123 for MP3 streams
+    mpg123 = shutil.which('mpg123') or '/usr/bin/mpg123'
+    if os.path.exists(mpg123):
+        try:
+            vol_db = 20 * (volume / 100) - 20
+            PLAYER_PROC = subprocess.Popen([
+                mpg123,'-q','-g', str(vol_db), url
+            ], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            ap = subprocess.Popen([aplay,'-D',out_dev,'-f','cd','-c','2','-r','44100'], 
+                                stdin=PLAYER_PROC.stdout)
+            PLAYER_PROC.stdout.close()
+            time.sleep(1.5)
+            if PLAYER_PROC.poll() is None and ap.poll() is None:
+                return True
+        except Exception:
+            pass
+    
+    stop_player()
+    return False
+
+def start_test_tone(frequency: int = 440, duration: int = 5, device: str = 'hw:0,0', volume: int = 100) -> bool:
+    global TEST_PROC
+    stop_test()
+    
+    # Try using speaker-test (ALSA utility)
+    speaker_test = shutil.which('speaker-test') or '/usr/bin/speaker-test'
+    if os.path.exists(speaker_test):
+        try:
+            # speaker-test generates sine wave tones
+            vol_pct = volume
+            TEST_PROC = subprocess.Popen([
+                speaker_test, '-t', 'sine', '-f', str(frequency),
+                '-c', '2', '-s', '1', '-D', device, '-l', '1'
+            ], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            time.sleep(0.5)
+            if TEST_PROC.poll() is None:
+                # Schedule stop after duration
+                def stop_after_delay():
+                    time.sleep(duration)
+                    stop_test()
+                import threading
+                threading.Thread(target=stop_after_delay, daemon=True).start()
+                return True
+        except Exception:
+            pass
+    
+    # Fallback: Use Python to generate tone and pipe to aplay
+    try:
+        import math
+        import wave
+        import tempfile
+        
+        sample_rate = 44100
+        num_samples = int(sample_rate * duration)
+        amplitude = int(32767 * volume / 100)
+        
+        # Generate sine wave
+        samples = []
+        for i in range(num_samples):
+            value = int(amplitude * math.sin(2 * math.pi * frequency * i / sample_rate))
+            samples.append(struct.pack('<hh', value, value))  # Stereo 16-bit
+        
+        # Write to temporary WAV file
+        with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as f:
+            temp_wav = f.name
+            with wave.open(temp_wav, 'wb') as w:
+                w.setnchannels(2)
+                w.setsampwidth(2)
+                w.setframerate(sample_rate)
+                w.writeframes(b''.join(samples))
+        
+        # Play with aplay
+        aplay = shutil.which('aplay') or '/usr/bin/aplay'
+        if os.path.exists(aplay):
+            TEST_PROC = subprocess.Popen([aplay, '-D', device, temp_wav],
+                                        stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            time.sleep(0.5)
+            if TEST_PROC.poll() is None:
+                def cleanup():
+                    TEST_PROC.wait()
+                    try:
+                        os.unlink(temp_wav)
+                    except:
+                        pass
+                import threading
+                threading.Thread(target=cleanup, daemon=True).start()
+                return True
+    except Exception as e:
+        pass
+    
+    stop_test()
+    return False
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    if request.method == 'POST':
+        username = request.form.get('username', '').strip()
+        password = request.form.get('password', '').strip()
+        
+        password_hash = hashlib.sha256(password.encode()).hexdigest()
+        
+        if username == ADMIN_USERNAME and password_hash == ADMIN_PASSWORD_HASH:
+            session['logged_in'] = True
+            session['username'] = username
+            return redirect(url_for('index'))
+        else:
+            return render_template('login.html', error='Invalid username or password')
+    
+    return render_template('login.html')
+
+@app.route('/logout')
+def logout():
+    session.clear()
+    return redirect(url_for('login'))
+
+@app.route('/')
+@login_required
+def index():
+    return render_template('index.html', session=session)
+
+@app.route('/api/start', methods=['POST'])
+@login_required
+def api_start():
+    try:
+        data = parse_request_payload()
+        if not data:
+            return jsonify(success=False, message='Missing request body'), 400
+        url = data.get('url','').strip()
+        out = data.get('device','hw:0,0').strip() or 'hw:0,0'
+        volume = int(data.get('volume', 100))
+        volume = max(0, min(100, volume))
+        
+        if not url:
+            return jsonify(success=False, message='Missing url'), 400
+        
+        ok = start_player(url, out, volume)
+        if ok:
+            update_config(stream_url=url, device=out, volume=volume)
+        return jsonify(success=ok, message='Started' if ok else 'Failed to start')
+    except Exception as e:
+        return jsonify(success=False, message=str(e)), 500
+
+@app.route('/api/stop', methods=['POST'])
+@login_required
+def api_stop():
+    stop_player()
+    return jsonify(success=True)
+
+@app.route('/api/test/start', methods=['POST'])
+@login_required
+def api_test_start():
+    try:
+        data = parse_request_payload()
+        if not data:
+            return jsonify(success=False, message='Missing request body'), 400
+        frequency = int(data.get('frequency', 440))
+        duration = int(data.get('duration', 5))
+        device = data.get('device', 'hw:0,0').strip() or 'hw:0,0'
+        volume = int(data.get('volume', 100))
+        volume = max(0, min(100, volume))
+        frequency = max(20, min(20000, frequency))
+        duration = max(1, min(60, duration))
+        
+        ok = start_test_tone(frequency, duration, device, volume)
+        if ok:
+            update_config(
+                test_frequency=frequency,
+                test_duration=duration,
+                test_device=device,
+                volume=volume
+            )
+        return jsonify(success=ok, message='Test tone started' if ok else 'Failed to start test tone')
+    except Exception as e:
+        return jsonify(success=False, message=str(e)), 500
+
+@app.route('/api/test/stop', methods=['POST'])
+@login_required
+def api_test_stop():
+    stop_test()
+    return jsonify(success=True)
+
+@app.route('/api/volume', methods=['POST'])
+@login_required
+def api_volume():
+    try:
+        data = parse_request_payload()
+        if not data:
+            return jsonify(success=False, message='Missing request body'), 400
+        volume = int(data.get('volume', 100))
+        volume = max(0, min(100, volume))
+        
+        global CURRENT_VOLUME, PLAYER_PROC
+        CURRENT_VOLUME = volume
+        update_config(volume=volume)
+        
+        # Try to change volume on running player (requires restart for most players)
+        if PLAYER_PROC and PLAYER_PROC.poll() is None:
+            # VLC volume control via dbus or restart needed
+            # For now, just store volume for next start
+            pass
+        
+        return jsonify(success=True, volume=volume)
+    except Exception as e:
+        return jsonify(success=False, message=str(e)), 500
+
+@app.route('/api/status', methods=['GET'])
+@login_required
+def api_status():
+    is_running = PLAYER_PROC is not None and PLAYER_PROC.poll() is None
+    is_testing = TEST_PROC is not None and TEST_PROC.poll() is None
+    return jsonify({
+        'playing': is_running,
+        'testing': is_testing,
+        'volume': CURRENT_VOLUME
+    })
+
+@app.route('/api/config', methods=['GET', 'POST'])
+@login_required
+def api_config():
+    if request.method == 'GET':
+        return jsonify(success=True, config=CONFIG)
+    data = parse_request_payload()
+    if not data:
+        return jsonify(success=False, message='Missing request body'), 400
+    updates = {}
+    if 'stream_url' in data:
+        updates['stream_url'] = data.get('stream_url', '').strip()
+    if 'device' in data:
+        updates['device'] = data.get('device', '').strip() or 'hw:0,0'
+    if 'volume' in data:
+        updates['volume'] = max(0, min(100, int(data.get('volume', 100))))
+    if 'test_frequency' in data:
+        updates['test_frequency'] = max(20, min(20000, int(data.get('test_frequency', 440))))
+    if 'test_duration' in data:
+        updates['test_duration'] = max(1, min(60, int(data.get('test_duration', 5))))
+    if 'test_device' in data:
+        updates['test_device'] = data.get('test_device', '').strip() or 'hw:0,0'
+    new_config = update_config(**updates)
+    return jsonify(success=True, config=new_config)
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5000, debug=False)

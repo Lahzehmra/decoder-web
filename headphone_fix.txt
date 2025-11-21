@@ -1,0 +1,32 @@
+PCM5102A Headphone Connection Issue:
+====================================
+
+Problem: Speakers on headphone pin but no audio
+
+Possible Issues:
+1. Headphone pin NOT connected to VOUTL+ and VOUTR+
+2. Missing DC blocking capacitors (needed for headphone jack)
+3. Headphone circuit not routed to PCM5102A outputs
+
+PCM5102A Output Pins:
+- VOUTL+ (Left channel output)
+- VOUTR+ (Right channel output)
+- VOUTL-/VOUTR- or GND (output ground)
+
+Solutions:
+1. Connect headphones DIRECTLY to:
+   VOUTL+ -> Left headphone wire
+   VOUTR+ -> Right headphone wire
+   GND -> Common ground
+
+2. Or check if headphone jack needs:
+   - DC blocking capacitors (4.7uF or 10uF) in series
+   - Volume control resistors (optional)
+
+3. Test direct connection:
+   Connect speaker/headphone wires directly to 
+   VOUTL+ and VOUTR+ pins on PCM5102A chip
+
+Quick Test:
+- Touch wire from VOUTL+ to headphone + 
+- Should hear audio (even if faint)
