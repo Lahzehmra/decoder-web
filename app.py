@@ -452,6 +452,7 @@ def api_output_levels():
     except Exception as e:
         return jsonify(success=False, message=str(e)), 500
 
+
 @app.route('/api/switch', methods=['POST'])
 @login_required
 def api_switch():
@@ -463,6 +464,11 @@ def api_switch():
             return jsonify(success=False, message='No url2 provided'), 400
         stop_player()
         ok = start_player(url, out)
+        if ok:
+            try:
+                update_config(stream_url=url)
+            except Exception:
+                pass
         return jsonify(success=ok)
     except Exception as e:
         return jsonify(success=False, message=str(e)), 500

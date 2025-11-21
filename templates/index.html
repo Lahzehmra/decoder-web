@@ -92,37 +92,39 @@
 
     </div>
 
-    
-
-    <div class="info">
-
-      <strong>Tip:</strong> Preferred URLs are direct MP3/OGG/AAC streams. If a playlist is supplied the first playable entry will be used automatically.
-
-    </div>
-
 
 
     <div class="section">
-
       <h2>Audio Player</h2>
-
-      <label>Stream / Playlist URL</label>
-
-      <input id="url" type="text" placeholder="http://example.com:8000/stream or http://station/live.m3u" />
-
-      
-
+      <label>Link 1</label>
+      <input id="url1" placeholder="example.com:8000/;stream" />
+      <label>Link 2 (fallback)</label>
+      <input id="url2" placeholder="backup:8000/;stream" />
+      <label>Buffer (seconds)</label>
+      <input id="buffer" type="number" min="1" max="60" value="12" />
       <div class="controls">
         <button id="playBtn" class="play-btn" onclick="startPlay()">▶ Play</button>
         <button class="secondary" onclick="switchToLink2()">⇄ Switch to Link 2</button>
         <button id="stopBtn" class="secondary" onclick="stopPlay()">⏹ Stop</button>
       </div>
+      <div class="status" id="playerStatus">Ready to play</div>
+    </div>
 
       <div class="status" id="playerStatus">Ready to play</div>
 
     </div>
 
 
+
+    <div class="section">
+      <h2>Meters</h2>
+      <div class="info">Simple peak meters: Link1, Link2 (sampled), Output (live).</div>
+      <div id="meters" style="display:flex; gap:12px; flex-wrap:wrap;">
+        <canvas id="m1" width="120" height="16" style="background:#0e141c;border:1px solid #213040;border-radius:4px"></canvas>
+        <canvas id="m2" width="120" height="16" style="background:#0e141c;border:1px solid #213040;border-radius:4px"></canvas>
+        <canvas id="mOut" width="120" height="16" style="background:#0e141c;border:1px solid #213040;border-radius:4px"></canvas>
+      </div>
+    </div>
 
     <div class="section">
 
@@ -166,15 +168,7 @@
 
 
 
-    <div class="section">
-
-      <h2>Playback Buffer</h2>
-
-      <p>VLC runs with 12&nbsp;s network caching plus 15&nbsp;s live/TCP/file buffers and auto reconnect. If VLC fails the ffmpeg→aplay fallback adds a 1&nbsp;MB input buffer with retry logic.</p>
-
-      <p>If a stream still stutters, restart playback or lower the source bit-rate.</p>
-
-    </div>
+    
 
   </div>
 
