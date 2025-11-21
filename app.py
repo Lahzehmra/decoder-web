@@ -35,6 +35,7 @@ DEFAULT_CONFIG = {
     'test_duration': 5,
     'test_device': 'hw:0,0'
 }
+
 CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'config.json')
 CONFIG_LOCK = Lock()
 
@@ -77,6 +78,16 @@ def update_config(**updates):
             persist_config()
     return CONFIG
 
+
+
+def normalize_url(u: str) -> str:
+    u=(u or '').strip()
+    if not u:
+        return u
+    import re as _re
+    if not _re.match(r'^[a-zA-Z][a-zA-Z0-9+.-]*://', u):
+        return 'http://' + u
+    return u
 
 def parse_request_payload():
     data = request.get_json(silent=True)
@@ -393,6 +404,68 @@ def api_status():
         'testing': is_testing,
         'volume': CURRENT_VOLUME
     })
+
+@app.route('/api/levels')
+@login_required
+def api_levels():
+    try:
+        url = request.args.get('url','').strip()
+        url = normalize_url(url)
+        if not url:
+            return jsonify(success=False, message='missing url'), 400
+        import subprocess, array, os, math, shutil
+        ff = shutil.which('ffmpeg') or '/usr/bin/ffmpeg'
+        if not os.path.exists(ff):
+            return jsonify(success=False, message='ffmpeg missing'), 500
+        proc = subprocess.Popen([ff,'-hide_banner','-loglevel','error','-t','0.15','-vn','-sn','-dn','-i',url,
+                                 '-f','s16le','-ac','2','-ar','16000','-'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        data = proc.stdout.read(16000*2*2//6) if proc.stdout else b''
+        try: proc.terminate()
+        except Exception: pass
+        if not data:
+            return jsonify(success=True, L=0.0, R=0.0)
+        samples = array.array('h'); samples.frombytes(data)
+        n=len(samples)//2
+        if n<=0:
+            return jsonify(success=True, L=0.0, R=0.0)
+        peakL=peakR=0
+        for i in range(0,n*2,2):
+            a=abs(samples[i]); b=abs(samples[i+1])
+            if a>peakL: peakL=a
+            if b>peakR: peakR=b
+        def to_dbfs(pk):
+            import math
+            return round(20*math.log10(max(1e-6, pk/32767.0)),1)
+        return jsonify(success=True, L_db=to_dbfs(peakL), R_db=to_dbfs(peakR))
+    except Exception as e:
+        return jsonify(success=False, message=str(e)), 500
+
+@app.route('/api/output_levels')
+@login_required
+def api_output_levels():
+    try:
+        import json, os, time
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'levels.json')
+        with open(path, 'r', encoding='utf-8') as f:
+            j = json.load(f)
+        return jsonify(success=True, levels=j)
+    except Exception as e:
+        return jsonify(success=False, message=str(e)), 500
+
+@app.route('/api/switch', methods=['POST'])
+@login_required
+def api_switch():
+    try:
+        data = parse_request_payload()
+        url = normalize_url(data.get('url2','').strip())
+        out = 'hw:0,0'
+        if not url:
+            return jsonify(success=False, message='No url2 provided'), 400
+        stop_player()
+        ok = start_player(url, out)
+        return jsonify(success=ok)
+    except Exception as e:
+        return jsonify(success=False, message=str(e)), 500
 
 @app.route('/api/config', methods=['GET', 'POST'])
 @login_required
