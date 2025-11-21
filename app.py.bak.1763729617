@@ -29,9 +29,6 @@ CURRENT_VOLUME = 100
 
 DEFAULT_CONFIG = {
     'stream_url': '',
-    'stream_url1': '',
-    'stream_url2': '',
-    'current_stream_idx': 1,
     'device': 'hw:0,0',
     'volume': 100,
     'test_frequency': 440,
@@ -310,7 +307,7 @@ def logout():
 @app.route('/')
 @login_required
 def index():
-    return render_template('index.html', session=session, config=CONFIG)
+    return render_template('index.html', session=session)
 
 @app.route('/api/start', methods=['POST'])
 @login_required
@@ -485,10 +482,6 @@ def api_config():
     if not data:
         return jsonify(success=False, message='Missing request body'), 400
     updates = {}
-    if 'stream_url1' in data:
-        updates['stream_url1'] = normalize_url(data.get('stream_url1',''))
-    if 'stream_url2' in data:
-        updates['stream_url2'] = normalize_url(data.get('stream_url2',''))
     if 'stream_url' in data:
         updates['stream_url'] = data.get('stream_url', '').strip()
     if 'device' in data:
